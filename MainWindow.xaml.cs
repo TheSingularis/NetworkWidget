@@ -110,6 +110,16 @@ namespace NetworkWidget
             menu.Items.Add("Show/Hide", null, (_, _) => ToggleVisibility());
             menu.Items.Add("Refresh Now", null, (_, _) => RefreshNetworkInfo());
             menu.Items.Add(new WinForms.ToolStripSeparator());
+
+            var startupItem = new WinForms.ToolStripMenuItem("Start with Windows")
+            {
+                CheckOnClick = true,
+                Checked = IsStartupEnabled()
+            };
+            startupItem.Click += (_, _) => SetStartupEnabled(startupItem.Checked);
+            menu.Items.Add(startupItem);
+
+            menu.Items.Add(new WinForms.ToolStripSeparator());
             menu.Items.Add("Exit", null, (_, _) => ExitApp());
 
             _trayIcon.ContextMenuStrip = menu;
@@ -123,6 +133,31 @@ namespace NetworkWidget
                     ToggleVisibility();
                 }
             };
+        }
+
+        private const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
+        private const string RunValueName = "NetworkWidget";
+
+        private static bool IsStartupEnabled()
+        {
+            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: false);
+            return key?.GetValue(RunValueName) != null;
+        }
+
+        private static void SetStartupEnabled(bool enabled)
+        {
+            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: true)
+                ?? Microsoft.Win32.Registry.CurrentUser.CreateSubKey(RunKeyPath);
+
+            if (enabled)
+            {
+                var exePath = Process.GetCurrentProcess().MainModule!.FileName!;
+                key.SetValue(RunValueName, $"\"{exePath}\" --minimized");
+            }
+            else
+            {
+                key.DeleteValue(RunValueName, throwOnMissingValue: false);
+            }
         }
 
         private void ToggleVisibility()
@@ -183,7 +218,10 @@ namespace NetworkWidget
         private static System.Collections.Generic.IEnumerable<NetworkInterface> GetActiveInterfaces() =>
             NetworkInterface.GetAllNetworkInterfaces()
                 .Where(n => n.OperationalStatus == OperationalStatus.Up
-                            && n.NetworkInterfaceType != NetworkInterfaceType.Loopback);
+                            && n.NetworkInterfaceType != NetworkInterfaceType.Loopback
+                            // Hyper-V virtual switches ("vEthernet (...)") clutter the
+                            // adapter list without being anything a user would pick.
+                            && !n.Name.StartsWith("vEthernet", StringComparison.OrdinalIgnoreCase));
 
         // Keeps the dropdown in sync with whatever adapters are currently up, without
         // clobbering the user's selection on every 5s tick unless it's no longer valid.
