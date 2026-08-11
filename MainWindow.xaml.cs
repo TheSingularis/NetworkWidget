@@ -33,7 +33,7 @@ namespace NetworkWidget
 
             // Must happen once the native HWND exists (SourceInitialized), before the
             // window is shown, so it never flashes square corners or a light system border.
-            SourceInitialized += (_, _) => ApplyWindowStyling();
+            SourceInitialized += (_, _) => DwmHelper.ApplyDarkRoundedStyling(this);
 
             // With SizeToContent="Height", ActualHeight isn't final until after layout,
             // so position once the window has been laid out rather than at SourceInitialized.
@@ -57,27 +57,6 @@ namespace NetworkWidget
             var dpi = VisualTreeHelper.GetDpi(this);
             Left = area.Right / dpi.DpiScaleX - ActualWidth - 20;
             Top = area.Bottom / dpi.DpiScaleY - ActualHeight - 20;
-        }
-
-        // WindowStyle="None" gives us a fully custom title bar (see XAML), but it also
-        // means Windows 11's automatic corner rounding no longer applies - only DWM can
-        // restore that, via this attribute (22000+; silently no-ops on older builds).
-        [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
-        private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
-
-        private const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
-        private const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
-        private const int DWMWCP_ROUND = 2;
-
-        private void ApplyWindowStyling()
-        {
-            var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
-
-            int enabled = 1;
-            DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ref enabled, sizeof(int));
-
-            int corner = DWMWCP_ROUND;
-            DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ref corner, sizeof(int));
         }
 
         private void TitleBar_MouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
@@ -110,15 +89,7 @@ namespace NetworkWidget
             menu.Items.Add("Show/Hide", null, (_, _) => ToggleVisibility());
             menu.Items.Add("Refresh Now", null, (_, _) => RefreshNetworkInfo());
             menu.Items.Add(new WinForms.ToolStripSeparator());
-
-            var startupItem = new WinForms.ToolStripMenuItem("Start with Windows")
-            {
-                CheckOnClick = true,
-                Checked = IsStartupEnabled()
-            };
-            startupItem.Click += (_, _) => SetStartupEnabled(startupItem.Checked);
-            menu.Items.Add(startupItem);
-
+            menu.Items.Add("Settings...", null, (_, _) => OpenSettings());
             menu.Items.Add(new WinForms.ToolStripSeparator());
             menu.Items.Add("Exit", null, (_, _) => ExitApp());
 
@@ -135,29 +106,18 @@ namespace NetworkWidget
             };
         }
 
-        private const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
-        private const string RunValueName = "NetworkWidget";
+        private SettingsWindow? _settingsWindow;
 
-        private static bool IsStartupEnabled()
+        private void OpenSettings()
         {
-            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: false);
-            return key?.GetValue(RunValueName) != null;
-        }
-
-        private static void SetStartupEnabled(bool enabled)
-        {
-            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: true)
-                ?? Microsoft.Win32.Registry.CurrentUser.CreateSubKey(RunKeyPath);
-
-            if (enabled)
+            if (_settingsWindow == null)
             {
-                var exePath = Process.GetCurrentProcess().MainModule!.FileName!;
-                key.SetValue(RunValueName, $"\"{exePath}\" --minimized");
+                _settingsWindow = new SettingsWindow();
+                _settingsWindow.Closed += (_, _) => _settingsWindow = null;
             }
-            else
-            {
-                key.DeleteValue(RunValueName, throwOnMissingValue: false);
-            }
+
+            _settingsWindow.Show();
+            _settingsWindow.Activate();
         }
 
         private void ToggleVisibility()

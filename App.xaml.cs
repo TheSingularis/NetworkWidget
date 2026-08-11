@@ -1,4 +1,3 @@
-using System.Linq;
 using System.Windows;
 
 namespace NetworkWidget
@@ -11,10 +10,10 @@ namespace NetworkWidget
 
             var window = new MainWindow();
 
-            // Launched via the "Start with Windows" registry entry, which passes
-            // this flag so the widget doesn't pop up over everything at login.
-            bool startMinimized = e.Args.Any(a => a.Equals("--minimized", System.StringComparison.OrdinalIgnoreCase));
-            if (!startMinimized)
+            // "Start minimized" is a persisted preference (set from the Settings pane),
+            // not a launch flag, so it applies whether the app was auto-started or opened
+            // by hand.
+            if (!AppSettings.Load().StartMinimized)
             {
                 window.Show();
             }
