@@ -183,6 +183,14 @@ namespace NetworkWidget
                             // adapter list without being anything a user would pick.
                             && !n.Name.StartsWith("vEthernet", StringComparison.OrdinalIgnoreCase));
 
+        private static int AdapterTypePriority(NetworkInterface nic) => nic.NetworkInterfaceType switch
+        {
+            NetworkInterfaceType.Ethernet or NetworkInterfaceType.GigabitEthernet
+                or NetworkInterfaceType.FastEthernetT or NetworkInterfaceType.FastEthernetFx => 0,
+            NetworkInterfaceType.Wireless80211 => 1,
+            _ => 2,
+        };
+
         // Keeps the dropdown in sync with whatever adapters are currently up, without
         // clobbering the user's selection on every 5s tick unless it's no longer valid.
         private void UpdateAdapterList()
@@ -200,8 +208,15 @@ namespace NetworkWidget
 
             if (_selectedAdapterId == null || !options.Any(o => o.Id == _selectedAdapterId))
             {
-                var defaultNic = GetActiveInterfaces().FirstOrDefault(n => n.GetIPProperties().GatewayAddresses
-                    .Any(g => g.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork));
+                // Prefer whichever of Ethernet/WiFi actually has a working route, wired
+                // over wireless - matches how Windows itself deprioritizes WiFi once a
+                // cable is plugged in, so this naturally tracks "the one really in use"
+                // rather than whatever GetAllNetworkInterfaces() happens to list first.
+                var defaultNic = GetActiveInterfaces()
+                    .Where(n => n.GetIPProperties().GatewayAddresses
+                        .Any(g => g.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork))
+                    .OrderBy(AdapterTypePriority)
+                    .FirstOrDefault();
                 _selectedAdapterId = defaultNic?.Id ?? options[0].Id;
             }
 
