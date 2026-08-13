@@ -31,6 +31,9 @@ namespace NetworkWidget
         private long _prevBytesReceived;
         private long _prevBytesSent;
         private DateTime _prevTrafficSample;
+        private const int TrafficHistoryLength = 40; // ~40s of history at the 1s traffic tick
+        private readonly System.Collections.Generic.Queue<double> _rxHistory = new();
+        private readonly System.Collections.Generic.Queue<double> _txHistory = new();
 
         private sealed class AdapterOption
         {
@@ -233,6 +236,10 @@ namespace NetworkWidget
                 txtDownload.Text = "-";
                 txtUpload.Text = "-";
                 _trafficAdapterId = null;
+                _rxHistory.Clear();
+                _txHistory.Clear();
+                sparkDownload.Points.Clear();
+                sparkUpload.Points.Clear();
                 return;
             }
 
@@ -247,6 +254,11 @@ namespace NetworkWidget
                 _prevTrafficSample = now;
                 txtDownload.Text = "-";
                 txtUpload.Text = "-";
+                // Byte counts (and therefore history) aren't comparable across adapters.
+                _rxHistory.Clear();
+                _txHistory.Clear();
+                sparkDownload.Points.Clear();
+                sparkUpload.Points.Clear();
                 return;
             }
 
@@ -257,11 +269,49 @@ namespace NetworkWidget
                 var txBytesPerSec = Math.Max(0, stats.BytesSent - _prevBytesSent) / elapsedSeconds;
                 txtDownload.Text = FormatRate(rxBytesPerSec);
                 txtUpload.Text = FormatRate(txBytesPerSec);
+
+                PushSample(_rxHistory, rxBytesPerSec);
+                PushSample(_txHistory, txBytesPerSec);
+                RedrawSparkline(sparkDownload, _rxHistory);
+                RedrawSparkline(sparkUpload, _txHistory);
             }
 
             _prevBytesReceived = stats.BytesReceived;
             _prevBytesSent = stats.BytesSent;
             _prevTrafficSample = now;
+        }
+
+        private static void PushSample(System.Collections.Generic.Queue<double> history, double value)
+        {
+            history.Enqueue(value);
+            while (history.Count > TrafficHistoryLength) history.Dequeue();
+        }
+
+        // Auto-scaled to the current window's own peak (like Task Manager's network
+        // graph) rather than a fixed max, so it stays readable at any traffic level
+        // instead of looking flat during light use or clipping during a burst.
+        private static void RedrawSparkline(System.Windows.Shapes.Polyline line, System.Collections.Generic.Queue<double> history)
+        {
+            if (history.Count < 2)
+            {
+                line.Points.Clear();
+                return;
+            }
+
+            double width = line.ActualWidth > 0 ? line.ActualWidth : 64;
+            double height = line.Height;
+            double max = Math.Max(history.Max(), 1);
+
+            var samples = history.ToArray();
+            var points = new System.Windows.Media.PointCollection(samples.Length);
+            for (int i = 0; i < samples.Length; i++)
+            {
+                double x = width * i / (samples.Length - 1);
+                double y = height - (samples[i] / max * height);
+                points.Add(new System.Windows.Point(x, y));
+            }
+
+            line.Points = points;
         }
 
         private static string FormatRate(double bytesPerSecond)
