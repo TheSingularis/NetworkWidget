@@ -18,6 +18,7 @@ namespace NetworkWidget
     public partial class MainWindow : Window
     {
         private readonly DispatcherTimer _timer = new();
+        private readonly DispatcherTimer _trafficTimer = new();
         private readonly DispatcherTimer _connectivityTimer = new();
         private readonly DispatcherTimer _updateTimer = new();
         private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(5) };
@@ -56,6 +57,15 @@ namespace NetworkWidget
             _timer.Tick += (_, _) => RefreshNetworkInfo();
             _timer.Start();
 
+            // Traffic only reads local interface byte counters (no process spawn, no
+            // network call), so it's cheap enough to run every second for a genuinely
+            // "live" feel, on its own timer separate from the WiFi check below - that
+            // one spawns netsh.exe each time, which is real overhead we don't want at
+            // a 1s cadence.
+            _trafficTimer.Interval = TimeSpan.FromSeconds(1);
+            _trafficTimer.Tick += (_, _) => UpdateTraffic();
+            _trafficTimer.Start();
+
             // Pings and the public-IP lookup are real network round-trips, so they run on
             // their own slower cadence rather than piling onto the 5s local-info refresh.
             _connectivityTimer.Interval = TimeSpan.FromSeconds(30);
@@ -67,6 +77,7 @@ namespace NetworkWidget
             _updateTimer.Start();
 
             RefreshNetworkInfo();
+            UpdateTraffic();
             _ = UpdateConnectivityAsync();
             CheckForUpdates();
         }
@@ -202,7 +213,6 @@ namespace NetworkWidget
                 UpdateAdapterList();
                 UpdateIpInfo();
                 UpdateWifiInfo();
-                UpdateTraffic();
                 txtUpdated.Text = $"Last updated: {DateTime.Now:HH:mm:ss}";
             }
             catch (Exception ex)
@@ -270,9 +280,26 @@ namespace NetworkWidget
 
             await Task.WhenAll(gatewayTask, internetTask, publicIpTask);
 
-            txtGatewayPing.Text = gatewayTask.Result;
-            txtInternetPing.Text = internetTask.Result;
+            SetPingResult(txtGatewayPing, gatewayTask.Result);
+            SetPingResult(txtInternetPing, internetTask.Result);
             txtPublicIp.Text = publicIpTask.Result;
+        }
+
+        // Reuses the same muted green already used for the Release & Renew success
+        // state, paired with an equally muted red - kept subtle rather than alarming.
+        private static readonly System.Windows.Media.Brush PingOkBrush =
+            new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x5C, 0xB8, 0x5C));
+        private static readonly System.Windows.Media.Brush PingFailBrush =
+            new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xD9, 0x53, 0x4F));
+        private static readonly System.Windows.Media.Brush DefaultValueBrush =
+            new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xEE, 0xEE, 0xEE));
+
+        private static void SetPingResult(System.Windows.Controls.TextBlock target, string result)
+        {
+            target.Text = result;
+            target.Foreground = result.EndsWith(" ms") ? PingOkBrush
+                : result == "unreachable" ? PingFailBrush
+                : DefaultValueBrush;
         }
 
         private static async Task<string> PingAsync(string? host)
