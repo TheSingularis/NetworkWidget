@@ -2,7 +2,10 @@ name: Build and Release
 
 on:
   push:
-    branches: [ main ]
+    # dev is the integration branch every push lands on; main only ever advances
+    # together with a tag (main == latest release), so it doesn't need its own
+    # trigger here - the tags entry below covers it.
+    branches: [ dev ]
     tags: [ 'v*' ]
 
 jobs:
