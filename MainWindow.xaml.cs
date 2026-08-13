@@ -2,8 +2,10 @@ using System;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Linq;
+using System.Net.Http;
 using System.Net.NetworkInformation;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -16,9 +18,18 @@ namespace NetworkWidget
     public partial class MainWindow : Window
     {
         private readonly DispatcherTimer _timer = new();
+        private readonly DispatcherTimer _connectivityTimer = new();
+        private readonly DispatcherTimer _updateTimer = new();
+        private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(5) };
         private WinForms.NotifyIcon? _trayIcon;
         private bool _exiting;
         private string? _selectedAdapterId;
+        private string? _currentGatewayAddress;
+
+        private string? _trafficAdapterId;
+        private long _prevBytesReceived;
+        private long _prevBytesSent;
+        private DateTime _prevTrafficSample;
 
         private sealed class AdapterOption
         {
@@ -45,7 +56,19 @@ namespace NetworkWidget
             _timer.Tick += (_, _) => RefreshNetworkInfo();
             _timer.Start();
 
+            // Pings and the public-IP lookup are real network round-trips, so they run on
+            // their own slower cadence rather than piling onto the 5s local-info refresh.
+            _connectivityTimer.Interval = TimeSpan.FromSeconds(30);
+            _connectivityTimer.Tick += (_, _) => _ = UpdateConnectivityAsync();
+            _connectivityTimer.Start();
+
+            _updateTimer.Interval = TimeSpan.FromHours(6);
+            _updateTimer.Tick += (_, _) => CheckForUpdates();
+            _updateTimer.Start();
+
             RefreshNetworkInfo();
+            _ = UpdateConnectivityAsync();
+            CheckForUpdates();
         }
 
         // Screen.WorkingArea is in physical pixels; Window.Left/Top are DPI-independent
@@ -90,7 +113,7 @@ namespace NetworkWidget
             menu.Items.Add("Refresh Now", null, (_, _) => RefreshNetworkInfo());
             menu.Items.Add(new WinForms.ToolStripSeparator());
             menu.Items.Add("Settings...", null, (_, _) => OpenSettings());
-            menu.Items.Add("Check for Updates", null, (_, _) => _ = AppUpdater.CheckAndApplyAsync());
+            menu.Items.Add("Check for Updates", null, (_, _) => CheckForUpdates());
             menu.Items.Add(new WinForms.ToolStripSeparator());
             menu.Items.Add("Exit", null, (_, _) => ExitApp());
 
@@ -105,6 +128,18 @@ namespace NetworkWidget
                     ToggleVisibility();
                 }
             };
+        }
+
+        private void CheckForUpdates()
+        {
+            _ = AppUpdater.CheckAndApplyAsync(async version =>
+            {
+                _trayIcon?.ShowBalloonTip(4000, "Network Widget",
+                    $"Updating to v{version}, relaunching...", WinForms.ToolTipIcon.Info);
+                // Give the balloon a moment to actually render before the process
+                // restarts out from under it.
+                await Task.Delay(2500);
+            });
         }
 
         private SettingsWindow? _settingsWindow;
@@ -167,12 +202,105 @@ namespace NetworkWidget
                 UpdateAdapterList();
                 UpdateIpInfo();
                 UpdateWifiInfo();
+                UpdateTraffic();
                 txtUpdated.Text = $"Last updated: {DateTime.Now:HH:mm:ss}";
             }
             catch (Exception ex)
             {
                 txtStatus.Foreground = System.Windows.Media.Brushes.Red;
                 txtStatus.Text = $"Error refreshing: {ex.Message}";
+            }
+        }
+
+        // Byte counters are cumulative, not a rate - so a live rate needs a delta
+        // between two samples. The baseline resets whenever the selected adapter
+        // changes, since byte counts aren't comparable across different adapters.
+        private void UpdateTraffic()
+        {
+            var nic = GetActiveInterfaces().FirstOrDefault(n => n.Id == _selectedAdapterId);
+            if (nic == null)
+            {
+                txtDownload.Text = "-";
+                txtUpload.Text = "-";
+                _trafficAdapterId = null;
+                return;
+            }
+
+            var stats = nic.GetIPv4Statistics();
+            var now = DateTime.UtcNow;
+
+            if (_trafficAdapterId != nic.Id)
+            {
+                _trafficAdapterId = nic.Id;
+                _prevBytesReceived = stats.BytesReceived;
+                _prevBytesSent = stats.BytesSent;
+                _prevTrafficSample = now;
+                txtDownload.Text = "-";
+                txtUpload.Text = "-";
+                return;
+            }
+
+            var elapsedSeconds = (now - _prevTrafficSample).TotalSeconds;
+            if (elapsedSeconds > 0)
+            {
+                var rxBytesPerSec = Math.Max(0, stats.BytesReceived - _prevBytesReceived) / elapsedSeconds;
+                var txBytesPerSec = Math.Max(0, stats.BytesSent - _prevBytesSent) / elapsedSeconds;
+                txtDownload.Text = FormatRate(rxBytesPerSec);
+                txtUpload.Text = FormatRate(txBytesPerSec);
+            }
+
+            _prevBytesReceived = stats.BytesReceived;
+            _prevBytesSent = stats.BytesSent;
+            _prevTrafficSample = now;
+        }
+
+        private static string FormatRate(double bytesPerSecond)
+        {
+            double kbps = bytesPerSecond / 1024.0;
+            return kbps >= 1024 ? $"{kbps / 1024.0:0.#} MB/s" : $"{kbps:0.#} KB/s";
+        }
+
+        // Pings and the public-IP lookup are real network calls, so this runs on the
+        // slower 30s _connectivityTimer rather than the 5s local-info timer.
+        private async Task UpdateConnectivityAsync()
+        {
+            var gatewayTask = PingAsync(_currentGatewayAddress);
+            var internetTask = PingAsync("1.1.1.1");
+            var publicIpTask = GetPublicIpAsync();
+
+            await Task.WhenAll(gatewayTask, internetTask, publicIpTask);
+
+            txtGatewayPing.Text = gatewayTask.Result;
+            txtInternetPing.Text = internetTask.Result;
+            txtPublicIp.Text = publicIpTask.Result;
+        }
+
+        private static async Task<string> PingAsync(string? host)
+        {
+            if (string.IsNullOrEmpty(host)) return "-";
+
+            try
+            {
+                using var ping = new Ping();
+                var reply = await ping.SendPingAsync(host, 1500);
+                return reply.Status == IPStatus.Success ? $"{reply.RoundtripTime} ms" : "unreachable";
+            }
+            catch
+            {
+                return "-";
+            }
+        }
+
+        private static async Task<string> GetPublicIpAsync()
+        {
+            try
+            {
+                var ip = await _http.GetStringAsync("https://api.ipify.org");
+                return ip.Trim();
+            }
+            catch
+            {
+                return "-";
             }
         }
 
@@ -240,11 +368,13 @@ namespace NetworkWidget
 
             if (nic == null)
             {
+                txtLinkSpeed.Text = "-";
                 txtIPv4.Text = "-";
                 txtSubnet.Text = "-";
                 txtGateway.Text = "-";
                 txtDNS.Text = "-";
                 txtMAC.Text = "-";
+                _currentGatewayAddress = null;
                 return;
             }
 
@@ -257,11 +387,21 @@ namespace NetworkWidget
                 .Where(d => d.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
                 .Select(d => d.ToString());
 
+            txtLinkSpeed.Text = FormatLinkSpeed(nic.Speed);
             txtIPv4.Text = v4?.Address.ToString() ?? "-";
             txtSubnet.Text = $"/{v4?.PrefixLength ?? 0}";
             txtGateway.Text = gateway?.Address.ToString() ?? "-";
             txtDNS.Text = string.Join(", ", dnsServers);
             txtMAC.Text = FormatMac(nic.GetPhysicalAddress().ToString());
+
+            _currentGatewayAddress = gateway?.Address.ToString();
+        }
+
+        private static string FormatLinkSpeed(long bitsPerSecond)
+        {
+            if (bitsPerSecond <= 0) return "-";
+            double mbps = bitsPerSecond / 1_000_000.0;
+            return mbps >= 1000 ? $"{mbps / 1000.0:0.#} Gbps" : $"{mbps:0} Mbps";
         }
 
         private static string FormatMac(string raw)
@@ -275,22 +415,19 @@ namespace NetworkWidget
             var output = RunCommand("netsh", "wlan show interfaces");
             var props = ParseNetshBlock(output);
 
-            if (props.TryGetValue("State", out var state) && state.Equals("connected", StringComparison.OrdinalIgnoreCase))
-            {
-                txtSSID.Text = props.GetValueOrDefault("SSID", "-");
-                txtSignal.Text = props.GetValueOrDefault("Signal", "-");
-                txtRSSI.Text = GetRssiText();
-                txtChannel.Text = props.GetValueOrDefault("Channel", "-");
-                txtRadio.Text = props.GetValueOrDefault("Radio type", "-");
-            }
-            else
-            {
-                txtSSID.Text = "not connected";
-                txtSignal.Text = "-";
-                txtRSSI.Text = "-";
-                txtChannel.Text = "-";
-                txtRadio.Text = "-";
-            }
+            bool connected = props.TryGetValue("State", out var state)
+                && state.Equals("connected", StringComparison.OrdinalIgnoreCase);
+
+            // Collapsed rather than shown-with-dashes when not connected via WiFi (e.g.
+            // on Ethernet) - otherwise the section is just dead space in the widget.
+            wifiSection.Visibility = connected ? Visibility.Visible : Visibility.Collapsed;
+            if (!connected) return;
+
+            txtSSID.Text = props.GetValueOrDefault("SSID", "-");
+            txtSignal.Text = props.GetValueOrDefault("Signal", "-");
+            txtRSSI.Text = GetRssiText();
+            txtChannel.Text = props.GetValueOrDefault("Channel", "-");
+            txtRadio.Text = props.GetValueOrDefault("Radio type", "-");
         }
 
         // netsh only exposes signal strength as a %; the real dBm figure comes from the

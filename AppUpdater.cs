@@ -1,3 +1,4 @@
+using System;
 using System.Threading.Tasks;
 using Velopack;
 using Velopack.Sources;
@@ -8,7 +9,11 @@ namespace NetworkWidget
     {
         private const string RepoUrl = "https://github.com/TheSingularis/NetworkWidget";
 
-        public static async Task CheckAndApplyAsync()
+        // onUpdateApplying, if given, is awaited (e.g. to show a tray notification)
+        // after the new version has finished downloading but before the restart that
+        // actually swaps it in - the process exits inside ApplyUpdatesAndRestart, so
+        // this is the last chance to tell the user anything.
+        public static async Task CheckAndApplyAsync(Func<string, Task>? onUpdateApplying = null)
         {
             try
             {
@@ -23,6 +28,12 @@ namespace NetworkWidget
                 if (updateInfo == null) return;
 
                 await mgr.DownloadUpdatesAsync(updateInfo);
+
+                if (onUpdateApplying != null)
+                {
+                    await onUpdateApplying(updateInfo.TargetFullRelease.Version.ToString());
+                }
+
                 mgr.ApplyUpdatesAndRestart(updateInfo.TargetFullRelease);
             }
             catch

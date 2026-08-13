@@ -25,10 +25,6 @@ namespace NetworkWidget
             {
                 window.Show();
             }
-
-            // Fire-and-forget: failures are swallowed inside AppUpdater so a network
-            // hiccup or GitHub rate limit never affects normal startup.
-            _ = AppUpdater.CheckAndApplyAsync();
         }
     }
 }
