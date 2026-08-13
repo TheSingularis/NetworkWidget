@@ -75,14 +75,16 @@ namespace NetworkWidget
             _connectivityTimer.Tick += (_, _) => _ = UpdateConnectivityAsync();
             _connectivityTimer.Start();
 
+            // The initial check-on-launch lives in App.xaml.cs (shown in the startup
+            // progress window); this timer just covers re-checks for a widget that
+            // stays running for a long time between restarts.
             _updateTimer.Interval = TimeSpan.FromHours(6);
-            _updateTimer.Tick += (_, _) => CheckForUpdates();
+            _updateTimer.Tick += (_, _) => CheckForUpdatesSilently();
             _updateTimer.Start();
 
             RefreshNetworkInfo();
             UpdateTraffic();
             _ = UpdateConnectivityAsync();
-            CheckForUpdates();
         }
 
         // Screen.WorkingArea is in physical pixels; Window.Left/Top are DPI-independent
@@ -127,7 +129,7 @@ namespace NetworkWidget
             menu.Items.Add("Refresh Now", null, (_, _) => RefreshNetworkInfo());
             menu.Items.Add(new WinForms.ToolStripSeparator());
             menu.Items.Add("Settings...", null, (_, _) => OpenSettings());
-            menu.Items.Add("Check for Updates", null, (_, _) => CheckForUpdates());
+            menu.Items.Add("Check for Updates", null, (_, _) => CheckForUpdatesWithProgress());
             menu.Items.Add(new WinForms.ToolStripSeparator());
             menu.Items.Add("Exit", null, (_, _) => ExitApp());
 
@@ -144,9 +146,11 @@ namespace NetworkWidget
             };
         }
 
-        private void CheckForUpdates()
+        // Used by the periodic background timer - no window, just a tray balloon if
+        // an update is actually found (routine "nothing to do" checks stay invisible).
+        private void CheckForUpdatesSilently()
         {
-            _ = AppUpdater.CheckAndApplyAsync(async version =>
+            _ = AppUpdater.CheckAndApplyAsync(onUpdateApplying: async version =>
             {
                 _trayIcon?.ShowBalloonTip(4000, "Network Widget",
                     $"Updating to v{version}, relaunching...", WinForms.ToolTipIcon.Info);
@@ -154,6 +158,35 @@ namespace NetworkWidget
                 // restarts out from under it.
                 await Task.Delay(2500);
             });
+        }
+
+        // Used for the manual "Check for Updates" tray click - shows a small progress
+        // window with a spinner and live status instead of doing it silently.
+        private UpdateProgressWindow? _updateProgressWindow;
+
+        private async void CheckForUpdatesWithProgress()
+        {
+            if (_updateProgressWindow != null)
+            {
+                _updateProgressWindow.Activate();
+                return;
+            }
+
+            var progress = new UpdateProgressWindow();
+            _updateProgressWindow = progress;
+            progress.Closed += (_, _) => _updateProgressWindow = null;
+            progress.Show();
+
+            await AppUpdater.CheckAndApplyAsync(
+                status => progress.SetStatus(status),
+                async version =>
+                {
+                    progress.SetStatus($"Updating to v{version}, relaunching...");
+                    await Task.Delay(1500);
+                });
+
+            await Task.Delay(600);
+            progress.Close();
         }
 
         private SettingsWindow? _settingsWindow;

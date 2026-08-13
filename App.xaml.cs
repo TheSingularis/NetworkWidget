@@ -1,3 +1,5 @@
+using System;
+using System.Threading.Tasks;
 using System.Windows;
 
 namespace NetworkWidget
@@ -12,9 +14,23 @@ namespace NetworkWidget
             Velopack.VelopackApp.Build().Run();
         }
 
-        protected override void OnStartup(StartupEventArgs e)
+        protected override async void OnStartup(StartupEventArgs e)
         {
             base.OnStartup(e);
+
+            var progress = new UpdateProgressWindow();
+            progress.Show();
+
+            // Capped rather than fully awaited: if GitHub is slow or unreachable, the
+            // widget should still start promptly rather than hang on startup waiting
+            // for a routine update check. The check itself keeps running in the
+            // background either way (AppUpdater applies-and-restarts on its own if it
+            // finds something after this window has already moved on).
+            var checkTask = AppUpdater.CheckAndApplyAsync(status => progress.SetStatus(status));
+            await Task.WhenAny(checkTask, Task.Delay(TimeSpan.FromSeconds(5)));
+
+            progress.SetStatus("Starting widget...");
+            await Task.Delay(300);
 
             var window = new MainWindow();
 
@@ -25,6 +41,8 @@ namespace NetworkWidget
             {
                 window.Show();
             }
+
+            progress.Close();
         }
     }
 }
