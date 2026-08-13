@@ -18,8 +18,8 @@ obj/
 
 # Publish output
 publish/
-publish-velopack/
-velopack-release/
+publish-velopack*/
+velopack-release*/
 *.pubxml
 *.pubxml.user
 
