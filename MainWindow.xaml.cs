@@ -90,6 +90,7 @@ namespace NetworkWidget
             menu.Items.Add("Refresh Now", null, (_, _) => RefreshNetworkInfo());
             menu.Items.Add(new WinForms.ToolStripSeparator());
             menu.Items.Add("Settings...", null, (_, _) => OpenSettings());
+            menu.Items.Add("Check for Updates", null, (_, _) => _ = AppUpdater.CheckAndApplyAsync());
             menu.Items.Add(new WinForms.ToolStripSeparator());
             menu.Items.Add("Exit", null, (_, _) => ExitApp());
 

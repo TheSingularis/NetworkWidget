@@ -4,6 +4,14 @@ namespace NetworkWidget
 {
     public partial class App : System.Windows.Application
     {
+        public App()
+        {
+            // Must run before anything else - this is how Velopack intercepts its
+            // own install/update/uninstall lifecycle command-line invocations and
+            // exits immediately when appropriate, rather than launching the app.
+            Velopack.VelopackApp.Build().Run();
+        }
+
         protected override void OnStartup(StartupEventArgs e)
         {
             base.OnStartup(e);
@@ -17,6 +25,10 @@ namespace NetworkWidget
             {
                 window.Show();
             }
+
+            // Fire-and-forget: failures are swallowed inside AppUpdater so a network
+            // hiccup or GitHub rate limit never affects normal startup.
+            _ = AppUpdater.CheckAndApplyAsync();
         }
     }
 }
