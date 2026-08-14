@@ -59,8 +59,15 @@
                         </Path.RenderTransform>
                     </Path>
                 </Grid>
+
                 <TextBlock x:Name="txtStatus" Text="Checking for updates..." Foreground="#EEEEEE" FontSize="12"
                            Margin="0,16,0,0" HorizontalAlignment="Center"/>
+
+                <Border x:Name="progressTrack" Width="160" Height="4" Background="#2B2B2B" CornerRadius="2"
+                        Margin="0,12,0,0" HorizontalAlignment="Center" Visibility="Collapsed">
+                    <Border x:Name="progressFill" Width="0" Height="4" Background="#3A7EE0" CornerRadius="2"
+                            HorizontalAlignment="Left"/>
+                </Border>
             </StackPanel>
         </DockPanel>
     </Border>

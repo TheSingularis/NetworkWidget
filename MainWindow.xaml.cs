@@ -182,33 +182,37 @@ namespace NetworkWidget
             });
         }
 
-        // Used for the manual "Check for Updates" tray click - shows a small progress
-        // window with a spinner and live status instead of doing it silently.
-        private UpdateProgressWindow? _updateProgressWindow;
+        // Used for the manual "Check for Updates" tray click - same pre-open-style
+        // splash window App.xaml.cs uses at startup, not folded into this window's
+        // own content, so both entry points behave identically.
+        private bool _checkingForUpdates;
 
         private async void CheckForUpdatesWithProgress()
         {
-            if (_updateProgressWindow != null)
+            if (_checkingForUpdates) return;
+            _checkingForUpdates = true;
+
+            var splash = new UpdateProgressWindow();
+            splash.Show();
+
+            var (mgr, info) = await AppUpdater.CheckAsync(status => splash.SetStatus(status));
+            if (info != null)
             {
-                _updateProgressWindow.Activate();
-                return;
+                await AppUpdater.DownloadAndApplyAsync(mgr, info,
+                    status => splash.SetStatus(status),
+                    percent => splash.SetProgress(percent),
+                    async version =>
+                    {
+                        splash.SetStatus($"Updating to v{version}...");
+                        await Task.Delay(800);
+                    });
+                // Only reached if the update attempt failed (best-effort, logged via
+                // status above) - a successful apply exits the process from inside
+                // ApplyUpdatesAndRestart and never returns here.
             }
 
-            var progress = new UpdateProgressWindow();
-            _updateProgressWindow = progress;
-            progress.Closed += (_, _) => _updateProgressWindow = null;
-            progress.Show();
-
-            await AppUpdater.CheckAndApplyAsync(
-                status => progress.SetStatus(status),
-                async version =>
-                {
-                    progress.SetStatus($"Updating to v{version}, relaunching...");
-                    await Task.Delay(1500);
-                });
-
-            await Task.Delay(600);
-            progress.Close();
+            splash.Close();
+            _checkingForUpdates = false;
         }
 
         private SettingsWindow? _settingsWindow;

@@ -20,6 +20,16 @@ namespace NetworkWidget
             txtStatus.Text = text;
         }
 
+        // Shows/updates a determinate progress bar for the download phase specifically
+        // (0-100); the spinner keeps running throughout regardless, as a generic
+        // "still working" indicator for the checking/installing phases either side of it.
+        public void SetProgress(int percent)
+        {
+            if (_closed) return;
+            progressTrack.Visibility = Visibility.Visible;
+            progressFill.Width = progressTrack.ActualWidth * System.Math.Clamp(percent, 0, 100) / 100.0;
+        }
+
         private void TitleBar_MouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
         {
             if (e.ButtonState == System.Windows.Input.MouseButtonState.Pressed)
