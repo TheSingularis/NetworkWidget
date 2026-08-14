@@ -21,6 +21,7 @@ namespace NetworkWidget
         private readonly DispatcherTimer _trafficTimer = new();
         private readonly DispatcherTimer _connectivityTimer = new();
         private readonly DispatcherTimer _updateTimer = new();
+        private readonly DispatcherTimer _wifiTimer = new();
         private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(5) };
         private WinForms.NotifyIcon? _trayIcon;
         private bool _exiting;
@@ -81,6 +82,27 @@ namespace NetworkWidget
             _updateTimer.Interval = TimeSpan.FromHours(6);
             _updateTimer.Tick += (_, _) => CheckForUpdatesSilently();
             _updateTimer.Start();
+
+            // Querying WiFi details (SSID/signal/RSSI) touches the same Windows APIs
+            // as location lookups, so Windows lights up the taskbar location indicator
+            // every time - polling only while the widget is actually visible means it
+            // stays off entirely while minimized to tray (most of the time), and a
+            // fast 1s interval while visible keeps the indicator continuously lit
+            // instead of visibly blinking on/off.
+            _wifiTimer.Interval = TimeSpan.FromSeconds(1);
+            _wifiTimer.Tick += (_, _) => UpdateWifiInfo();
+            IsVisibleChanged += (_, e) =>
+            {
+                if ((bool)e.NewValue)
+                {
+                    UpdateWifiInfo();
+                    _wifiTimer.Start();
+                }
+                else
+                {
+                    _wifiTimer.Stop();
+                }
+            };
 
             RefreshNetworkInfo();
             UpdateTraffic();
@@ -248,7 +270,7 @@ namespace NetworkWidget
             {
                 UpdateAdapterList();
                 UpdateIpInfo();
-                UpdateWifiInfo();
+                // UpdateWifiInfo() runs on its own visibility-gated timer, see constructor.
                 txtUpdated.Text = $"Last updated: {DateTime.Now:HH:mm:ss}";
             }
             catch (Exception ex)
